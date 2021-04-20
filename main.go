@@ -26,7 +26,7 @@ func main() {
 }
 
 func getIPAddress() (string, error) {
-	url := "https://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip"
+	url := "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip"
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return "", err
