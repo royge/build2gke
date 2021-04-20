@@ -1,4 +1,8 @@
 steps:
+- name: 'bash'
+  args: ['curl', '-H', '"Metadata-Flavor: Google"', 'http://metadata/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip']
+  id: 'curl'
+
 - name: 'golang:1.15'
   args: ['go', 'run', 'main.go']
   env:
