@@ -5,15 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"runtime"
 
 	"cloud.google.com/go/pubsub"
 )
 
 const (
 	Pending uint = iota + 1
-	Error
 	Success
+	Error
 )
 
 // Event defines the properties of cloud build event.
@@ -65,16 +64,17 @@ func (r *Runner) sendDeploymentTrigger(ctx context.Context, event *Event) error 
 	return nil
 }
 
-func (r *Runner) waitForDeploymentResult(ctx context.Context, event *Event) error {
-	count := runtime.NumCPU()
-	eventStatusCh := make(chan uint, count)
-	errCh := make(chan error, count)
+func (r *Runner) waitForDeploymentResult(ctx context.Context, event *Event) (err error) {
+	eventStatusCh := make(chan uint)
+
+	ctx, cancel := context.WithCancel(ctx)
 
 	go func() {
-		err := r.Receiver.Receive(ctx, func(ctx context.Context, msg *pubsub.Message) {
+		// TODO: Handles error accordingly.
+		// nolint errcheck
+		r.Receiver.Receive(ctx, func(ctx context.Context, msg *pubsub.Message) {
 			evnt := Event{}
-			if err := json.Unmarshal(msg.Data, &evnt); err != nil {
-				errCh <- err
+			if err = json.Unmarshal(msg.Data, &evnt); err != nil {
 				return
 			}
 			if evnt.BuildID == event.BuildID {
@@ -83,28 +83,15 @@ func (r *Runner) waitForDeploymentResult(ctx context.Context, event *Event) erro
 				msg.Ack()
 			}
 		})
-
-		if err != context.Canceled {
-			errCh <- err
-		}
 	}()
 
-	var err error
-	done := false
-
-	for !done {
-		select {
-		case status := <-eventStatusCh:
-			if status == Error {
-				err = errors.New("deployment error")
-			}
-			done = true
-		case err = <-errCh:
-			done = true
-		}
+	status := <-eventStatusCh
+	if status == Error {
+		err = errors.New("deployment error")
 	}
 
+	cancel()
 	close(eventStatusCh)
-	close(errCh)
+
 	return err
 }

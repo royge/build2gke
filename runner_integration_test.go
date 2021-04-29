@@ -21,7 +21,6 @@ func integrationTestSetup(t *testing.T) *testConfig {
 		t.Fatalf("PROJECT is not defined")
 	}
 
-	// NOTE: We still don't know when to cancel.
 	ctx, cancel := context.WithCancel(context.Background())
 
 	client, err := pubsub.NewClient(ctx, projectID)
@@ -42,10 +41,10 @@ func integrationTestSetup(t *testing.T) *testConfig {
 	}
 
 	return &testConfig{
-		Trigger:  trigger,
-		Result:   result,
-		Canceler: cancel,
-		Context:  ctx,
+		Trigger: trigger,
+		Result:  result,
+		Cancel:  cancel,
+		Context: ctx,
 	}
 }
 
@@ -98,20 +97,24 @@ func createSubscription(
 func integrationTestCleanup(t *testing.T, cfg *testConfig) {
 	t.Helper()
 
+	cfg.Cancel()
+
+	ctx := context.Background()
+
 	t.Log("[DEBUG]: deleting trigger's subscription")
-	if err := cfg.Trigger.Subscription.Delete(cfg.Context); err != nil {
+	if err := cfg.Trigger.Subscription.Delete(ctx); err != nil {
 		t.Logf("[WARNING]: unable to delete trigger's subscription, you to delete it manually: %v", err)
 	}
 	t.Log("[DEBUG]: deleting trigger's topic")
-	if err := cfg.Trigger.Topic.Delete(cfg.Context); err != nil {
+	if err := cfg.Trigger.Topic.Delete(ctx); err != nil {
 		t.Logf("[WARNING]: unable to delete trigger's topic, you to delete it manually: %v", err)
 	}
 	t.Log("[DEBUG]: deleting result's subscription")
-	if err := cfg.Result.Subscription.Delete(cfg.Context); err != nil {
+	if err := cfg.Result.Subscription.Delete(ctx); err != nil {
 		t.Logf("[WARNING]: unable to delete result's subscription, you to delete it manually: %v", err)
 	}
 	t.Log("[DEBUG]: deleting result's topic")
-	if err := cfg.Result.Topic.Delete(cfg.Context); err != nil {
+	if err := cfg.Result.Topic.Delete(ctx); err != nil {
 		t.Logf("[WARNING]: unable to delete result's topic, you to delete it manually: %v", err)
 	}
 }
@@ -122,18 +125,14 @@ type testConfig struct {
 	Trigger *pubsuber
 	Result  *pubsuber
 
-	Canceler context.CancelFunc
-	Context  context.Context
+	Cancel  context.CancelFunc
+	Context context.Context
 }
 
-func TestRunner_Run_Integration(t *testing.T) {
+// nolint funlen
+func TestRunner_Run_Integration_Success(t *testing.T) {
 	cfg := integrationTestSetup(t)
 	t.Cleanup(func() { integrationTestCleanup(t, cfg) })
-
-	runner := &Runner{
-		Publisher: cfg.Trigger.Topic,
-		Receiver:  cfg.Result.Subscription,
-	}
 
 	trigger := &Event{
 		BuildID:    "test1234",
@@ -142,16 +141,6 @@ func TestRunner_Run_Integration(t *testing.T) {
 		Tag:        "v1.0.0",
 		Status:     Pending,
 	}
-
-	result := &Event{
-		BuildID:    "test1234",
-		Repository: "github.com/royge/build2gke.git",
-		Branch:     "develop",
-		Tag:        "v1.0.0",
-		Status:     Success,
-	}
-
-	doneCh := make(chan bool, 1)
 
 	go func(t *testing.T) {
 		t.Helper()
@@ -176,12 +165,42 @@ func TestRunner_Run_Integration(t *testing.T) {
 		}
 	}(t)
 
+	runner := &Runner{
+		Publisher: cfg.Trigger.Topic,
+		Receiver:  cfg.Result.Subscription,
+	}
+
+	other := &Event{
+		BuildID:    "test2345",
+		Repository: "github.com/royge/build2gke.git",
+		Branch:     "develop",
+		Tag:        "v1.0.0",
+		Status:     Success,
+	}
+
+	another := &Event{
+		BuildID:    "test2346",
+		Repository: "github.com/royge/build2gke.git",
+		Branch:     "develop",
+		Tag:        "v1.0.0",
+		Status:     Success,
+	}
+
+	result := &Event{
+		BuildID:    "test1234",
+		Repository: "github.com/royge/build2gke.git",
+		Branch:     "develop",
+		Tag:        "v1.0.0",
+		Status:     Success,
+	}
+
+	doneCh := make(chan bool, 1)
+
 	go func(t *testing.T) {
 		t.Helper()
 
 		if err := runner.Run(cfg.Context, trigger); err != nil {
 			t.Errorf("unable to run the runner: %v", err)
-			return
 		}
 
 		doneCh <- true
@@ -190,9 +209,36 @@ func TestRunner_Run_Integration(t *testing.T) {
 	go func(t *testing.T) {
 		t.Helper()
 
+		t.Logf("[DEBUG] publishing deployment other results: %v", other)
+
+		data, err := json.Marshal(other)
+		if err != nil {
+			t.Errorf("unable to marshal other results data: %v", err)
+			return
+		}
+
+		cfg.Result.Topic.Publish(cfg.Context, &pubsub.Message{
+			Data: data,
+		})
+
+		t.Logf("[DEBUG] publishing deployment another results: %v", another)
+
+		data, err = json.Marshal(another)
+		if err != nil {
+			t.Errorf("unable to marshal other results data: %v", err)
+			return
+		}
+
+		cfg.Result.Topic.Publish(cfg.Context, &pubsub.Message{
+			Data: data,
+		})
+
+		// NOTE: Simulate deployment to take longer to finish.
+		time.Sleep(10 * time.Second)
+
 		t.Logf("[DEBUG] publishing deployment results: %v", result)
 
-		data, err := json.Marshal(result)
+		data, err = json.Marshal(result)
 		if err != nil {
 			t.Errorf("unable to marshal results data: %v", err)
 			return
@@ -205,4 +251,131 @@ func TestRunner_Run_Integration(t *testing.T) {
 
 	<-doneCh
 	close(doneCh)
+
+	t.Log("[DEBUG] done!")
+}
+
+func TestRunner_Run_Integration_Error(t *testing.T) {
+	cfg := integrationTestSetup(t)
+	t.Cleanup(func() { integrationTestCleanup(t, cfg) })
+
+	trigger := &Event{
+		BuildID:    "test1234",
+		Repository: "github.com/royge/build2gke.git",
+		Branch:     "develop",
+		Tag:        "v1.0.0",
+		Status:     Pending,
+	}
+
+	go func(t *testing.T) {
+		t.Helper()
+
+		t.Log("[DEBUG] waiting for deployment trigger")
+		err := cfg.Trigger.Subscription.Receive(cfg.Context, func(ctx context.Context, msg *pubsub.Message) {
+			got := Event{}
+			if err := json.Unmarshal(msg.Data, &got); err != nil {
+				t.Errorf("unable to unmarshal deployment event: %v", err)
+				return
+			}
+
+			t.Logf("[DEBUG] deployment event received: %v", got)
+
+			if got.BuildID != trigger.BuildID {
+				t.Errorf("want build id %v, got %v", trigger.BuildID, got.BuildID)
+			}
+			msg.Ack()
+		})
+		if err != nil {
+			t.Errorf("error receiving deployment trigger: %v", err)
+		}
+	}(t)
+
+	runner := &Runner{
+		Publisher: cfg.Trigger.Topic,
+		Receiver:  cfg.Result.Subscription,
+	}
+
+	other := &Event{
+		BuildID:    "test2345",
+		Repository: "github.com/royge/build2gke.git",
+		Branch:     "develop",
+		Tag:        "v1.0.0",
+		Status:     Success,
+	}
+
+	another := &Event{
+		BuildID:    "test2346",
+		Repository: "github.com/royge/build2gke.git",
+		Branch:     "develop",
+		Tag:        "v1.0.0",
+		Status:     Pending,
+	}
+
+	result := &Event{
+		BuildID:    "test1234",
+		Repository: "github.com/royge/build2gke.git",
+		Branch:     "develop",
+		Tag:        "v1.0.0",
+		Status:     Error,
+	}
+
+	doneCh := make(chan bool, 1)
+
+	go func(t *testing.T) {
+		t.Helper()
+
+		if err := runner.Run(cfg.Context, trigger); err == nil {
+			t.Error("expected error, got nil")
+		}
+
+		doneCh <- true
+	}(t)
+
+	go func(t *testing.T) {
+		t.Helper()
+
+		t.Logf("[DEBUG] publishing deployment other results: %v", other)
+
+		data, err := json.Marshal(other)
+		if err != nil {
+			t.Errorf("unable to marshal other results data: %v", err)
+			return
+		}
+
+		cfg.Result.Topic.Publish(cfg.Context, &pubsub.Message{
+			Data: data,
+		})
+
+		t.Logf("[DEBUG] publishing deployment another results: %v", another)
+
+		data, err = json.Marshal(another)
+		if err != nil {
+			t.Errorf("unable to marshal other results data: %v", err)
+			return
+		}
+
+		cfg.Result.Topic.Publish(cfg.Context, &pubsub.Message{
+			Data: data,
+		})
+
+		// NOTE: Simulate deployment to take longer to finish.
+		time.Sleep(10 * time.Second)
+
+		t.Logf("[DEBUG] publishing deployment results: %v", result)
+
+		data, err = json.Marshal(result)
+		if err != nil {
+			t.Errorf("unable to marshal results data: %v", err)
+			return
+		}
+
+		cfg.Result.Topic.Publish(cfg.Context, &pubsub.Message{
+			Data: data,
+		})
+	}(t)
+
+	<-doneCh
+	close(doneCh)
+
+	t.Log("[DEBUG] done!")
 }
