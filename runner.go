@@ -22,6 +22,7 @@ type Event struct {
 	Branch     string `json:"branch"`
 	Tag        string `json:"tag"`
 	Status     uint   `json:"status"`
+	Command    string `json:"command"`
 }
 
 type Publisher interface {

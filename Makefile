@@ -11,3 +11,6 @@ lint:
 # `make test` should be executed prior to this command.
 coverage:
 	go tool cover -html=coverage.out
+
+echo:
+	echo "testing only"

@@ -26,7 +26,9 @@ func TestRunner_Run(t *testing.T) {
 	defer publisher.AssertExpectations(t)
 
 	receiver := new(receiverMock)
-	cctx, _ := context.WithCancel(ctx)
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	receiver.On(
 		"Receive",
 		cctx,
