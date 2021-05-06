@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 	"time"
 
-	"cloud.google.com/go/pubsub"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -35,42 +33,33 @@ func TestDeployToGKE(t *testing.T) {
 
 func TestWorker_WatchForDeployment(t *testing.T) {
 	ctx := context.Background()
-	event := Event{
-		BuildID:    "12345",
-		Repository: "royge/build2gke",
-		Branch:     "develop",
-		Status:     Pending,
-	}
-	publisher := new(publisherMock)
-	data, err := json.Marshal(&event)
-	if err != nil {
-		t.Fatalf("unable to marshal event data: %v", err)
-	}
-	publisher.On("Publish", ctx, &pubsub.Message{Data: data}).Return(&pubsub.PublishResult{})
-	defer publisher.AssertExpectations(t)
-
 	receiver := new(receiverMock)
-	cctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
 	receiver.On(
 		"Receive",
-		cctx,
+		mock.Anything,
 		mock.AnythingOfType("func(context.Context, *pubsub.Message)"),
 	).Return(nil)
-	defer receiver.AssertExpectations(t)
 
-	exitCh := make(chan interface{})
+	exit := make(chan interface{})
 
-	worker := Worker{receiver, publisher, exitCh, nil}
+	worker := Worker{
+		Receiver: receiver,
+		Exit:     exit,
+	}
 
 	go func(t *testing.T) {
 		t.Helper()
 
-		if _, err := worker.watchForDeployment(ctx, exitCh); err != nil {
+		_, err := worker.watchForDeployment(ctx, exit)
+		if err != nil {
 			t.Fatalf("failure to run the runner: %v", err)
 		}
+
+		exit <- true
 	}(t)
+
+	<-exit
 }
 
 func TestWorker_DoDeployment(t *testing.T) {
@@ -78,13 +67,13 @@ func TestWorker_DoDeployment(t *testing.T) {
 
 	done := make(chan interface{})
 	jobs := make(chan Event)
-	doneJobs := make(chan Event)
+	doneJobs := make(<-chan Event)
 	ctx := context.Background()
 
 	worker := Worker{
 		Actions: []ActionFunc{
 			func(ctx context.Context, event *Event) error {
-				t.Log("[DEBUG] job: ", event)
+				t.Log("[INFO] job: ", event)
 				return nil
 			},
 		},
@@ -99,7 +88,7 @@ func TestWorker_DoDeployment(t *testing.T) {
 		}
 
 		for job := range doneJobs {
-			t.Log("[DEBUG] done job:", job)
+			t.Log("[INFO] done job:", job)
 			if job.Status != Success {
 				t.Errorf(
 					"want job status to be %v, got %v",
@@ -118,7 +107,7 @@ func TestWorker_DoDeployment(t *testing.T) {
 			Status:  Pending,
 		}
 
-		t.Log("[DEBUG] waiting for 250 milliseconds...")
+		t.Log("[INFO] waiting for 250 milliseconds...")
 		time.Sleep(250 * time.Millisecond)
 
 		jobs <- Event{
@@ -126,7 +115,7 @@ func TestWorker_DoDeployment(t *testing.T) {
 			Status:  Pending,
 		}
 
-		t.Log("[DEBUG] waiting for 2 seconds...")
+		t.Log("[INFO] waiting for 2 seconds...")
 		time.Sleep(2 * time.Second)
 
 		jobs <- Event{
@@ -134,7 +123,7 @@ func TestWorker_DoDeployment(t *testing.T) {
 			Status:  Pending,
 		}
 
-		t.Log("[DEBUG] waiting for 3 seconds...")
+		t.Log("[INFO] waiting for 3 seconds...")
 		time.Sleep(3 * time.Second)
 
 		jobs <- Event{

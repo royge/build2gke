@@ -54,6 +54,8 @@ func TestIntegration_Worker_WatchForDeployment(t *testing.T) {
 	done := make(chan interface{})
 	defer close(done)
 
+	start := make(chan interface{})
+
 	go func(t *testing.T) {
 		t.Helper()
 
@@ -61,6 +63,8 @@ func TestIntegration_Worker_WatchForDeployment(t *testing.T) {
 		if err != nil {
 			t.Errorf("error watching for deployment: %v", err)
 		}
+
+		start <- true
 
 		got := <-jobs
 		if got.BuildID != trigger.BuildID {
@@ -73,7 +77,9 @@ func TestIntegration_Worker_WatchForDeployment(t *testing.T) {
 	go func(t *testing.T) {
 		t.Helper()
 
-		t.Logf("[DEBUG] publishing deployment trigger: %v", trigger)
+		<-start
+
+		t.Logf("[INFO] publishing deployment trigger: %v", trigger)
 
 		data, err := json.Marshal(trigger)
 		if err != nil {
@@ -115,7 +121,7 @@ func TestIntegration_Worker_SendResults(t *testing.T) {
 	go func(t *testing.T) {
 		t.Helper()
 
-		t.Log("[DEBUG] waiting for deployment results")
+		t.Log("[INFO] waiting for deployment results")
 		err := cfg.Result.Subscription.Receive(cfg.Context, func(ctx context.Context, msg *pubsub.Message) {
 			got := Event{}
 			if err := json.Unmarshal(msg.Data, &got); err != nil {
@@ -123,7 +129,7 @@ func TestIntegration_Worker_SendResults(t *testing.T) {
 				return
 			}
 
-			t.Logf("[DEBUG] deployment result received: %v", got)
+			t.Logf("[INFO] deployment result received: %v", got)
 
 			if got.BuildID != result.BuildID {
 				t.Errorf("want build id %v, got %v", result.BuildID, got.BuildID)

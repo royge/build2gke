@@ -35,17 +35,21 @@ func (w *Worker) Do(ctx context.Context) error {
 }
 
 func (w *Worker) watchForDeployment(
-	ctx context.Context, done chan interface{},
-) (jobs chan Event, err error) {
-	jobs = make(chan Event)
+	ctx context.Context, done <-chan interface{},
+) (<-chan Event, error) {
+	var err error
+	jobs := make(chan Event)
 
 	go func() {
 		defer close(jobs)
 
-		event := Event{}
+		cctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
 		// TODO: Handles error accordingly.
 		// nolint errcheck
-		w.Receiver.Receive(ctx, func(ctx context.Context, msg *pubsub.Message) {
+		w.Receiver.Receive(cctx, func(ctx context.Context, msg *pubsub.Message) {
+			event := Event{}
 			if err = json.Unmarshal(msg.Data, &event); err != nil {
 				return
 			}
@@ -63,8 +67,8 @@ func (w *Worker) watchForDeployment(
 }
 
 func (w *Worker) doDeployment(
-	ctx context.Context, done chan interface{}, jobs chan Event,
-) (chan Event, error) {
+	ctx context.Context, done <-chan interface{}, jobs <-chan Event,
+) (<-chan Event, error) {
 	doneJobs := make(chan Event)
 	go func() {
 		defer close(doneJobs)
@@ -89,7 +93,9 @@ func (w *Worker) doDeployment(
 	return doneJobs, nil
 }
 
-func (w *Worker) sendResults(ctx context.Context, done chan interface{}, doneJobs chan Event) error {
+func (w *Worker) sendResults(
+	ctx context.Context, done <-chan interface{}, doneJobs <-chan Event,
+) error {
 	for job := range doneJobs {
 		job := job // To avoid possible race condition.
 		select {

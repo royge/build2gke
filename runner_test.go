@@ -6,10 +6,9 @@ import (
 	"testing"
 
 	"cloud.google.com/go/pubsub"
-	"github.com/stretchr/testify/mock"
 )
 
-func TestRunner_Run(t *testing.T) {
+func TestRunner_SendDeploymentTrigger(t *testing.T) {
 	ctx := context.Background()
 	event := Event{
 		BuildID:    "12345",
@@ -25,19 +24,9 @@ func TestRunner_Run(t *testing.T) {
 	publisher.On("Publish", ctx, &pubsub.Message{Data: data}).Return(&pubsub.PublishResult{})
 	defer publisher.AssertExpectations(t)
 
-	receiver := new(receiverMock)
-	cctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	runner := Runner{publisher, nil, nil}
 
-	receiver.On(
-		"Receive",
-		cctx,
-		mock.AnythingOfType("func(context.Context, *pubsub.Message)"),
-	).Return(nil)
-	defer receiver.AssertExpectations(t)
-
-	runner := Runner{publisher, receiver}
-	if err := runner.Run(ctx, &event); err != nil {
+	if err := runner.sendDeploymentTrigger(ctx, &event); err != nil {
 		t.Fatalf("failure to run the runner: %v", err)
 	}
 }

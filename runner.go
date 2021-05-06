@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 
 	"cloud.google.com/go/pubsub"
 )
@@ -40,6 +41,8 @@ type Receiver interface {
 type Runner struct {
 	Publisher Publisher
 	Receiver  Receiver
+
+	Exit chan interface{}
 }
 
 func (r *Runner) Run(ctx context.Context, event *Event) error {
@@ -47,7 +50,7 @@ func (r *Runner) Run(ctx context.Context, event *Event) error {
 		return fmt.Errorf("unable to send deployment event: %w", err)
 	}
 
-	if err := r.waitForDeploymentResult(ctx, event); err != nil {
+	if err := r.waitForDeploymentResult(ctx, r.Exit, event); err != nil {
 		return fmt.Errorf("deployment failed: %w", err)
 	}
 	return nil
@@ -65,15 +68,22 @@ func (r *Runner) sendDeploymentTrigger(ctx context.Context, event *Event) error 
 	return nil
 }
 
-func (r *Runner) waitForDeploymentResult(ctx context.Context, event *Event) (err error) {
+func (r *Runner) waitForDeploymentResult(ctx context.Context, done chan interface{}, event *Event) (err error) {
 	eventStatusCh := make(chan uint)
+	defer close(eventStatusCh)
 
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	m := sync.Mutex{}
 
 	go func() {
 		// TODO: Handles error accordingly.
 		// nolint errcheck
 		r.Receiver.Receive(ctx, func(ctx context.Context, msg *pubsub.Message) {
+			m.Lock()
+			defer m.Unlock()
+
 			evnt := Event{}
 			if err = json.Unmarshal(msg.Data, &evnt); err != nil {
 				return
@@ -86,13 +96,18 @@ func (r *Runner) waitForDeploymentResult(ctx context.Context, event *Event) (err
 		})
 	}()
 
-	status := <-eventStatusCh
-	if status == Error {
-		err = errors.New("deployment error")
+	ok := false
+	for !ok {
+		select {
+		case <-done:
+			ok = true
+		case status := <-eventStatusCh:
+			if status == Error {
+				err = errors.New("deployment error")
+			}
+			ok = true
+		}
 	}
-
-	cancel()
-	close(eventStatusCh)
 
 	return err
 }

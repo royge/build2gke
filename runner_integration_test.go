@@ -62,8 +62,11 @@ func createTopic(
 	t.Helper()
 
 	topicName := faker.Internet().Slug()
-	t.Log("[DEBUG] creating topic: ", topicName)
-	topic, err := client.CreateTopic(ctx, topicName)
+
+	t.Log("[INFO] creating topic: ", topicName)
+	topic, err := client.CreateTopicWithConfig(ctx, topicName, &pubsub.TopicConfig{
+		Labels: map[string]string{"env": "build2gke-testautomation"},
+	})
 	if err != nil {
 		t.Fatalf("unable to create new pubsub topic: %v", err)
 	}
@@ -78,7 +81,7 @@ func createSubscription(
 
 	subName := faker.Lorem().Word() + faker.Lorem().Word() + faker.Lorem().Word()
 
-	t.Log("[DEBUG] creating subscription: ", subName)
+	t.Log("[INFO] creating subscription: ", subName)
 
 	sub, err := client.CreateSubscription(
 		ctx,
@@ -86,6 +89,9 @@ func createSubscription(
 		pubsub.SubscriptionConfig{
 			Topic:       topic,
 			AckDeadline: 20 * time.Second,
+			Labels: map[string]string{
+				"env": "build2gke-testautomation",
+			},
 		})
 	if err != nil {
 		t.Fatalf("unable to create new pubsub subscription: %v", err)
@@ -101,19 +107,19 @@ func integrationTestCleanup(t *testing.T, cfg *testConfig) {
 
 	ctx := context.Background()
 
-	t.Log("[DEBUG]: deleting trigger's subscription")
+	t.Log("[INFO]: deleting trigger's subscription")
 	if err := cfg.Trigger.Subscription.Delete(ctx); err != nil {
 		t.Logf("[WARNING]: unable to delete trigger's subscription, you to delete it manually: %v", err)
 	}
-	t.Log("[DEBUG]: deleting trigger's topic")
+	t.Log("[INFO]: deleting trigger's topic")
 	if err := cfg.Trigger.Topic.Delete(ctx); err != nil {
 		t.Logf("[WARNING]: unable to delete trigger's topic, you to delete it manually: %v", err)
 	}
-	t.Log("[DEBUG]: deleting result's subscription")
+	t.Log("[INFO]: deleting result's subscription")
 	if err := cfg.Result.Subscription.Delete(ctx); err != nil {
 		t.Logf("[WARNING]: unable to delete result's subscription, you to delete it manually: %v", err)
 	}
-	t.Log("[DEBUG]: deleting result's topic")
+	t.Log("[INFO]: deleting result's topic")
 	if err := cfg.Result.Topic.Delete(ctx); err != nil {
 		t.Logf("[WARNING]: unable to delete result's topic, you to delete it manually: %v", err)
 	}
@@ -145,7 +151,7 @@ func TestRunner_Run_Integration_Success(t *testing.T) {
 	go func(t *testing.T) {
 		t.Helper()
 
-		t.Log("[DEBUG] waiting for deployment trigger")
+		t.Log("[INFO] waiting for deployment trigger")
 		err := cfg.Trigger.Subscription.Receive(cfg.Context, func(ctx context.Context, msg *pubsub.Message) {
 			got := Event{}
 			if err := json.Unmarshal(msg.Data, &got); err != nil {
@@ -153,7 +159,7 @@ func TestRunner_Run_Integration_Success(t *testing.T) {
 				return
 			}
 
-			t.Logf("[DEBUG] deployment event received: %v", got)
+			t.Logf("[INFO] deployment event received: %v", got)
 
 			if got.BuildID != trigger.BuildID {
 				t.Errorf("want build id %v, got %v", trigger.BuildID, got.BuildID)
@@ -168,6 +174,7 @@ func TestRunner_Run_Integration_Success(t *testing.T) {
 	runner := &Runner{
 		Publisher: cfg.Trigger.Topic,
 		Receiver:  cfg.Result.Subscription,
+		Exit:      make(chan interface{}),
 	}
 
 	other := &Event{
@@ -209,7 +216,7 @@ func TestRunner_Run_Integration_Success(t *testing.T) {
 	go func(t *testing.T) {
 		t.Helper()
 
-		t.Logf("[DEBUG] publishing deployment other results: %v", other)
+		t.Logf("[INFO] publishing deployment other results: %v", other)
 
 		data, err := json.Marshal(other)
 		if err != nil {
@@ -221,7 +228,7 @@ func TestRunner_Run_Integration_Success(t *testing.T) {
 			Data: data,
 		})
 
-		t.Logf("[DEBUG] publishing deployment another results: %v", another)
+		t.Logf("[INFO] publishing deployment another results: %v", another)
 
 		data, err = json.Marshal(another)
 		if err != nil {
@@ -236,7 +243,7 @@ func TestRunner_Run_Integration_Success(t *testing.T) {
 		// NOTE: Simulate deployment to take longer to finish.
 		time.Sleep(10 * time.Second)
 
-		t.Logf("[DEBUG] publishing deployment results: %v", result)
+		t.Logf("[INFO] publishing deployment results: %v", result)
 
 		data, err = json.Marshal(result)
 		if err != nil {
@@ -252,7 +259,7 @@ func TestRunner_Run_Integration_Success(t *testing.T) {
 	<-doneCh
 	close(doneCh)
 
-	t.Log("[DEBUG] done!")
+	t.Log("[INFO] done!")
 }
 
 func TestRunner_Run_Integration_Error(t *testing.T) {
@@ -270,7 +277,7 @@ func TestRunner_Run_Integration_Error(t *testing.T) {
 	go func(t *testing.T) {
 		t.Helper()
 
-		t.Log("[DEBUG] waiting for deployment trigger")
+		t.Log("[INFO] waiting for deployment trigger")
 		err := cfg.Trigger.Subscription.Receive(cfg.Context, func(ctx context.Context, msg *pubsub.Message) {
 			got := Event{}
 			if err := json.Unmarshal(msg.Data, &got); err != nil {
@@ -278,7 +285,7 @@ func TestRunner_Run_Integration_Error(t *testing.T) {
 				return
 			}
 
-			t.Logf("[DEBUG] deployment event received: %v", got)
+			t.Logf("[INFO] deployment event received: %v", got)
 
 			if got.BuildID != trigger.BuildID {
 				t.Errorf("want build id %v, got %v", trigger.BuildID, got.BuildID)
@@ -293,6 +300,7 @@ func TestRunner_Run_Integration_Error(t *testing.T) {
 	runner := &Runner{
 		Publisher: cfg.Trigger.Topic,
 		Receiver:  cfg.Result.Subscription,
+		Exit:      make(chan interface{}),
 	}
 
 	other := &Event{
@@ -334,7 +342,7 @@ func TestRunner_Run_Integration_Error(t *testing.T) {
 	go func(t *testing.T) {
 		t.Helper()
 
-		t.Logf("[DEBUG] publishing deployment other results: %v", other)
+		t.Logf("[INFO] publishing deployment other results: %v", other)
 
 		data, err := json.Marshal(other)
 		if err != nil {
@@ -346,7 +354,7 @@ func TestRunner_Run_Integration_Error(t *testing.T) {
 			Data: data,
 		})
 
-		t.Logf("[DEBUG] publishing deployment another results: %v", another)
+		t.Logf("[INFO] publishing deployment another results: %v", another)
 
 		data, err = json.Marshal(another)
 		if err != nil {
@@ -361,7 +369,7 @@ func TestRunner_Run_Integration_Error(t *testing.T) {
 		// NOTE: Simulate deployment to take longer to finish.
 		time.Sleep(10 * time.Second)
 
-		t.Logf("[DEBUG] publishing deployment results: %v", result)
+		t.Logf("[INFO] publishing deployment results: %v", result)
 
 		data, err = json.Marshal(result)
 		if err != nil {
@@ -377,5 +385,5 @@ func TestRunner_Run_Integration_Error(t *testing.T) {
 	<-doneCh
 	close(doneCh)
 
-	t.Log("[DEBUG] done!")
+	t.Log("[INFO] done!")
 }
